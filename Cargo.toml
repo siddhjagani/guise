@@ -1,0 +1,28 @@
+[package]
+name = "guise"
+version = "0.1.0"
+edition = "2021"
+description = "Wear a different account's guise on Claude Desktop — instant, local, non-destructive account switching."
+license = "MIT"
+repository = "https://github.com/siddhjagani/guise"
+readme = "README.md"
+keywords = ["claude", "anthropic", "macos", "account-switcher", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "guise"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dialoguer = { version = "0.11", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
+codegen-units = 1
