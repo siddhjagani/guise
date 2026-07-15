@@ -1,4 +1,8 @@
-<h1 align="center">guise</h1>
+<p align="center">
+  <img src="assets/logo.png" alt="Guise Logo" width="140">
+</p>
+
+<h1 align="center">Guise</h1>
 
 <p align="center">Run all your Claude Desktop accounts at once — each in its own window, each staying logged in. No logging out, no re-entering your password.</p>
 
@@ -32,9 +36,7 @@ into one account never touches another, so nothing ever gets logged out.
 ## Install
 
 ```console
-git clone https://github.com/siddhjagani/guise
-cd guise
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/siddhjagani/guise/refs/heads/main/install.sh | bash
 ```
 
 macOS only for now. Run `guise doctor` any time to check things are in order.
