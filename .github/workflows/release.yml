@@ -1,0 +1,52 @@
+name: release
+
+# Build a universal macOS binary and attach it to the GitHub Release whenever a
+# version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The resulting `guise-macos.tar.gz` is what install.sh and the Homebrew formula
+# download. The printed `guise-macos.tar.gz.sha256` is the value to paste into
+# the Homebrew formula (see Formula/guise.rb).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with both macOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build (Apple Silicon + Intel)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Make universal binary + tarball
+        run: |
+          lipo -create -output guise \
+            target/aarch64-apple-darwin/release/guise \
+            target/x86_64-apple-darwin/release/guise
+          chmod +x guise
+          ./guise --version
+          tar -czf guise-macos.tar.gz guise
+          shasum -a 256 guise-macos.tar.gz | tee guise-macos.tar.gz.sha256
+
+      - name: Publish to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            guise-macos.tar.gz
+            guise-macos.tar.gz.sha256
+          generate_release_notes: true

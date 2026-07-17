@@ -45,7 +45,10 @@ impl AppControl for RealApp {
             .status()
             .context("launching Claude instance via `open`")?;
         if !status.success() {
-            return Err(anyhow!("failed to launch Claude for {}", data_dir.display()));
+            return Err(anyhow!(
+                "failed to launch Claude for {}",
+                data_dir.display()
+            ));
         }
         Ok(())
     }
@@ -66,7 +69,10 @@ impl AppControl for RealApp {
             return Ok(());
         }
         for pid in &pids {
-            let _ = Command::new("kill").arg("-TERM").arg(pid.to_string()).output();
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
         }
         let deadline = Instant::now() + timeout;
         loop {
@@ -75,7 +81,10 @@ impl AppControl for RealApp {
             }
             if Instant::now() >= deadline {
                 for pid in pids_for_data_dir(data_dir)? {
-                    let _ = Command::new("kill").arg("-KILL").arg(pid.to_string()).output();
+                    let _ = Command::new("kill")
+                        .arg("-KILL")
+                        .arg(pid.to_string())
+                        .output();
                 }
                 return Ok(());
             }

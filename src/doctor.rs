@@ -33,7 +33,11 @@ pub fn run(paths: &Paths) -> Result<Report> {
     let mut checks = Vec::new();
 
     let app_ok = paths.app.exists();
-    checks.push(Check { name: "Claude.app".into(), ok: app_ok, detail: paths.app.display().to_string() });
+    checks.push(Check {
+        name: "Claude.app".into(),
+        ok: app_ok,
+        detail: paths.app.display().to_string(),
+    });
 
     let bin_ok = paths.app_binary().exists();
     checks.push(Check {
@@ -46,7 +50,11 @@ pub fn run(paths: &Paths) -> Result<Report> {
     checks.push(Check {
         name: "guise store (~/.guise)".into(),
         ok: true,
-        detail: if store_ok { paths.guise_root.display().to_string() } else { "will be created on first `guise add`".into() },
+        detail: if store_ok {
+            paths.guise_root.display().to_string()
+        } else {
+            "will be created on first `guise add`".into()
+        },
     });
 
     let ctrl = app::control();
@@ -66,13 +74,22 @@ pub fn run(paths: &Paths) -> Result<Report> {
     }
 
     let healthy = app_ok && bin_ok;
-    Ok(Report { checks, accounts, healthy })
+    Ok(Report {
+        checks,
+        accounts,
+        healthy,
+    })
 }
 
 pub fn print_human(report: &Report) {
     println!("guise checkup\n");
     for c in &report.checks {
-        println!("  {} {:<24} {}", if c.ok { "✓" } else { "✗" }, c.name, c.detail);
+        println!(
+            "  {} {:<24} {}",
+            if c.ok { "✓" } else { "✗" },
+            c.name,
+            c.detail
+        );
     }
     println!();
     if report.accounts.is_empty() {
@@ -81,12 +98,23 @@ pub fn print_human(report: &Report) {
         println!("  Saved accounts:");
         for a in &report.accounts {
             let dot = if a.running { " ● running" } else { "" };
-            let state = if a.initialized { "" } else { "  (not signed in yet — run `guise open` and log in)" };
+            let state = if a.initialized {
+                ""
+            } else {
+                "  (not signed in yet — run `guise open` and log in)"
+            };
             match &a.email {
                 Some(e) => println!("    {}. {}  ·  {}{}{}", a.slot, a.name, e, dot, state),
                 None => println!("    {}. {}{}{}", a.slot, a.name, dot, state),
             }
         }
     }
-    println!("\n  overall: {}", if report.healthy { "healthy ✓" } else { "needs attention ✗" });
+    println!(
+        "\n  overall: {}",
+        if report.healthy {
+            "healthy ✓"
+        } else {
+            "needs attention ✗"
+        }
+    );
 }

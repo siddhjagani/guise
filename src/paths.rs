@@ -65,7 +65,8 @@ pub fn exists(p: &Path) -> bool {
 
 /// Validate that a directory exists, returning a helpful error otherwise.
 pub fn require_dir(p: &Path, what: &str) -> Result<()> {
-    let md = std::fs::metadata(p).with_context(|| format!("{what} not found at {}", p.display()))?;
+    let md =
+        std::fs::metadata(p).with_context(|| format!("{what} not found at {}", p.display()))?;
     if !md.is_dir() {
         return Err(anyhow!("{what} at {} is not a directory", p.display()));
     }

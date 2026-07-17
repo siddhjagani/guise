@@ -19,7 +19,8 @@ impl ToolConfig {
         if !p.exists() {
             return Ok(ToolConfig::default());
         }
-        let raw = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+        let raw =
+            std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
         serde_json::from_str(&raw).with_context(|| format!("parsing {}", p.display()))
     }
 

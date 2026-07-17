@@ -129,7 +129,10 @@ fn open_account(paths: &Paths, account: &Account) -> Result<()> {
 
     if ctrl.is_instance_running(&data)? {
         ctrl.activate(&paths.app)?;
-        println!("✓ {} is already open — bringing it to the front.", account.meta.name);
+        println!(
+            "✓ {} is already open — bringing it to the front.",
+            account.meta.name
+        );
         return Ok(());
     }
 
@@ -264,7 +267,11 @@ fn list(paths: &Paths, json: bool) -> Result<()> {
         return Ok(());
     }
     for a in &accounts {
-        let dot = if ctrl.is_instance_running(&a.data_dir()).unwrap_or(false) { "●" } else { " " };
+        let dot = if ctrl.is_instance_running(&a.data_dir()).unwrap_or(false) {
+            "●"
+        } else {
+            " "
+        };
         match &a.meta.email {
             Some(e) => println!("{} {}. {:<14} ·  {}", dot, a.meta.slot, a.meta.name, e),
             None => println!("{} {}. {}", dot, a.meta.slot, a.meta.name),
@@ -277,12 +284,22 @@ fn config_cmd(paths: &Paths, action: Option<ConfigAction>) -> Result<()> {
     let mut cfg = ToolConfig::load(paths)?;
     match action {
         None => {
-            println!("app-path = {}", cfg.app_path.as_deref().unwrap_or(crate::paths::DEFAULT_APP_PATH));
+            println!(
+                "app-path = {}",
+                cfg.app_path
+                    .as_deref()
+                    .unwrap_or(crate::paths::DEFAULT_APP_PATH)
+            );
             Ok(())
         }
         Some(ConfigAction::Get { key }) => {
             match key.as_str() {
-                "app-path" => println!("{}", cfg.app_path.as_deref().unwrap_or(crate::paths::DEFAULT_APP_PATH)),
+                "app-path" => println!(
+                    "{}",
+                    cfg.app_path
+                        .as_deref()
+                        .unwrap_or(crate::paths::DEFAULT_APP_PATH)
+                ),
                 other => return Err(anyhow!("unknown config key: {other}")),
             }
             Ok(())

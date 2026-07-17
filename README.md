@@ -35,11 +35,27 @@ into one account never touches another, so nothing ever gets logged out.
 
 ## Install
 
+**Quick install**
+
 ```console
-curl -fsSL https://raw.githubusercontent.com/siddhjagani/guise/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/siddhjagani/guise/main/install.sh | bash
 ```
 
-macOS only for now. Run `guise doctor` any time to check things are in order.
+**Homebrew:**
+
+```console
+brew install siddhjagani/tap/guise
+```
+
+**From source** (needs a Rust toolchain):
+
+```console
+git clone https://github.com/siddhjagani/guise
+cd guise && ./install.sh
+```
+
+macOS only for now (Apple Silicon + Intel). Run `guise doctor` any time to check
+things are in order.
 
 ## Get started
 

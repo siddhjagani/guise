@@ -40,9 +40,14 @@ impl Account {
 
     pub fn load(dir: &Path) -> Result<Account> {
         let mp = Account::meta_path(dir);
-        let raw = std::fs::read_to_string(&mp).with_context(|| format!("reading {}", mp.display()))?;
-        let meta: Meta = serde_json::from_str(&raw).with_context(|| format!("parsing {}", mp.display()))?;
-        Ok(Account { dir: dir.to_path_buf(), meta })
+        let raw =
+            std::fs::read_to_string(&mp).with_context(|| format!("reading {}", mp.display()))?;
+        let meta: Meta =
+            serde_json::from_str(&raw).with_context(|| format!("parsing {}", mp.display()))?;
+        Ok(Account {
+            dir: dir.to_path_buf(),
+            meta,
+        })
     }
 
     pub fn save_meta(&self) -> Result<()> {
@@ -78,7 +83,9 @@ pub fn list_accounts(paths: &Paths) -> Result<Vec<Account>> {
 pub fn resolve_account(paths: &Paths, query: &str) -> Result<Account> {
     let accounts = list_accounts(paths)?;
     if accounts.is_empty() {
-        return Err(anyhow!("no saved accounts yet — run `guise add <name>` first"));
+        return Err(anyhow!(
+            "no saved accounts yet — run `guise add <name>` first"
+        ));
     }
     if let Ok(n) = query.parse::<u32>() {
         if let Some(a) = accounts.iter().find(|a| a.meta.slot == n) {
@@ -101,39 +108,71 @@ pub fn resolve_account(paths: &Paths, query: &str) -> Result<Account> {
         .collect();
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
-        [] => Err(anyhow!("no saved account matches \"{query}\" (try `guise ls`)")),
+        [] => Err(anyhow!(
+            "no saved account matches \"{query}\" (try `guise ls`)"
+        )),
         many => {
             let names: Vec<String> = many.iter().map(|a| a.meta.name.clone()).collect();
-            Err(anyhow!("\"{query}\" is ambiguous — matches: {}", names.join(", ")))
+            Err(anyhow!(
+                "\"{query}\" is ambiguous — matches: {}",
+                names.join(", ")
+            ))
         }
     }
 }
 
 /// Next free slot number.
 pub fn next_slot(paths: &Paths) -> Result<u32> {
-    Ok(list_accounts(paths)?.iter().map(|a| a.meta.slot).max().unwrap_or(0) + 1)
+    Ok(list_accounts(paths)?
+        .iter()
+        .map(|a| a.meta.slot)
+        .max()
+        .unwrap_or(0)
+        + 1)
 }
 
 /// Directory name for a slot + name, sanitized.
 pub fn account_dirname(slot: u32, name: &str) -> String {
     let safe: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '@') { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '@') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("{slot}-{safe}")
 }
 
 /// Create a brand-new empty account: its `data/` directory (for Claude to fill
 /// on first login) and its `meta.json`. Fails if the name is already taken.
-pub fn create_account(paths: &Paths, name: &str, email: Option<String>, created: String) -> Result<Account> {
-    if list_accounts(paths)?.iter().any(|a| a.meta.name.eq_ignore_ascii_case(name)) {
-        return Err(anyhow!("an account named \"{name}\" already exists (use `guise open {name}`)"));
+pub fn create_account(
+    paths: &Paths,
+    name: &str,
+    email: Option<String>,
+    created: String,
+) -> Result<Account> {
+    if list_accounts(paths)?
+        .iter()
+        .any(|a| a.meta.name.eq_ignore_ascii_case(name))
+    {
+        return Err(anyhow!(
+            "an account named \"{name}\" already exists (use `guise open {name}`)"
+        ));
     }
     let slot = next_slot(paths)?;
     let dir = paths.accounts_dir().join(account_dirname(slot, name));
     let account = Account {
         dir: dir.clone(),
-        meta: Meta { slot, name: name.to_string(), email, created, last_opened: None },
+        meta: Meta {
+            slot,
+            name: name.to_string(),
+            email,
+            created,
+            last_opened: None,
+        },
     };
     std::fs::create_dir_all(account.data_dir())
         .with_context(|| format!("creating {}", account.data_dir().display()))?;
@@ -153,7 +192,8 @@ pub fn delete_account(account: &Account) -> Result<()> {
 /// Atomic write (temp + rename) — the one filesystem primitive guise still needs.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
@@ -170,11 +210,16 @@ mod tests {
 
     fn temp_paths(tag: &str) -> Paths {
         let n = N.fetch_add(1, Ordering::SeqCst);
-        let root = std::env::temp_dir().join(format!("guise-acct-{}-{}-{}", std::process::id(), tag, n));
+        let root =
+            std::env::temp_dir().join(format!("guise-acct-{}-{}-{}", std::process::id(), tag, n));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        Paths { home: home.clone(), app: root.join("Claude.app"), guise_root: home.join(".guise") }
+        Paths {
+            home: home.clone(),
+            app: root.join("Claude.app"),
+            guise_root: home.join(".guise"),
+        }
     }
 
     #[test]
@@ -191,7 +236,10 @@ mod tests {
 
         assert_eq!(resolve_account(&paths, "1").unwrap().meta.name, "work");
         assert_eq!(resolve_account(&paths, "personal").unwrap().meta.slot, 2);
-        assert_eq!(resolve_account(&paths, "w@co.com").unwrap().meta.name, "work");
+        assert_eq!(
+            resolve_account(&paths, "w@co.com").unwrap().meta.name,
+            "work"
+        );
         assert_eq!(resolve_account(&paths, "wo").unwrap().meta.name, "work"); // prefix
         assert!(resolve_account(&paths, "nope").is_err());
     }
