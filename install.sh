@@ -47,15 +47,17 @@ install_from_source() {
 }
 
 install_prebuilt() {
-  local ver url tmp
+  local ver url
   ver="${GUISE_VERSION:-latest}"
   if [[ "$ver" == "latest" ]]; then
     url="https://github.com/$REPO/releases/latest/download/$ASSET"
   else
     url="https://github.com/$REPO/releases/download/$ver/$ASSET"
   fi
+  # `tmp` is intentionally global (not `local`) so the EXIT trap below can
+  # still see it after this function returns; `${tmp:-}` keeps `set -u` happy.
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'rm -rf "${tmp:-}"' EXIT
   echo "Downloading $BIN_NAME ($ver)…"
   if ! curl -fsSL "$url" -o "$tmp/$ASSET"; then
     echo "error: could not download $url" >&2
