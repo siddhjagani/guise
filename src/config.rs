@@ -6,11 +6,37 @@ use crate::paths::Paths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
     /// Override for the `Claude.app` bundle path, if not at the default.
     #[serde(default)]
     pub app_path: Option<String>,
+
+    /// Point every account's `claude-code-sessions` at one shared folder so
+    /// `meld` can merge Claude Code chats across accounts. On by default; it's
+    /// inert if you don't use meld (each account still only shows its own
+    /// chats until meld copies the others in). See README "Works with meld".
+    #[serde(default = "default_true")]
+    pub share_code_sessions: bool,
+
+    /// Where the shared `claude-code-sessions` lives. Defaults to meld's
+    /// configured `sessions_root`, else Claude's standard location.
+    #[serde(default)]
+    pub code_sessions_root: Option<String>,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        ToolConfig {
+            app_path: None,
+            share_code_sessions: true,
+            code_sessions_root: None,
+        }
+    }
 }
 
 impl ToolConfig {

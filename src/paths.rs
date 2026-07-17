@@ -48,6 +48,21 @@ impl Paths {
     pub fn tool_config_json(&self) -> PathBuf {
         self.guise_root.join("config.json")
     }
+
+    /// Claude's standard `claude-code-sessions` location (also meld's default
+    /// `sessions_root`). Used as the shared target so `meld` can merge chats.
+    pub fn default_code_sessions_root(&self) -> PathBuf {
+        self.home
+            .join("Library")
+            .join("Application Support")
+            .join("Claude")
+            .join("claude-code-sessions")
+    }
+
+    /// meld's config file, if the user has meld installed.
+    pub fn meld_config(&self) -> PathBuf {
+        self.home.join(".meld").join("config.toml")
+    }
 }
 
 /// Resolve the home directory from `$HOME`.

@@ -189,6 +189,117 @@ pub fn delete_account(account: &Account) -> Result<()> {
     Ok(())
 }
 
+// --------------------------------------------------------------------------
+// meld interop: share each account's `claude-code-sessions` via a symlink to
+// one folder, so `meld` can merge Claude Code chats across accounts.
+// --------------------------------------------------------------------------
+
+const CODE_SESSIONS: &str = "claude-code-sessions";
+
+/// Read meld's `sessions_root` from its config, if meld is set up.
+pub fn meld_sessions_root(meld_config: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(meld_config).ok()?;
+    for line in raw.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("sessions_root") {
+            if let Some(eq) = rest.find('=') {
+                let v = rest[eq + 1..].trim().trim_matches('"').trim();
+                if !v.is_empty() {
+                    return Some(PathBuf::from(v));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Is this account's `claude-code-sessions` already a symlink to `target`?
+pub fn is_code_sessions_linked(account: &Account, target: &Path) -> bool {
+    let link = account.data_dir().join(CODE_SESSIONS);
+    std::fs::read_link(&link)
+        .map(|t| t == target)
+        .unwrap_or(false)
+}
+
+/// This account's Claude account UUID, read from its own `config.json` (only
+/// present once the account has been logged into at least once).
+pub fn account_uuid(account: &Account) -> Option<String> {
+    let raw = std::fs::read_to_string(account.data_dir().join("config.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("lastKnownAccountUuid")
+        .and_then(|x| x.as_str())
+        .map(String::from)
+}
+
+/// Make meld aware of this account by ensuring its UUID subfolder exists in the
+/// shared sessions root. meld treats each UUID subfolder as an account and
+/// backfills the shared history into it on the next `meld sync` — so a brand-new
+/// account joins the unified history without first having to create a chat.
+/// No-op until the account has logged in (its UUID isn't known before then).
+pub fn ensure_meld_account_folder(account: &Account, target: &Path) -> Result<()> {
+    if let Some(uuid) = account_uuid(account) {
+        let dir = target.join(uuid);
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Point this account's `claude-code-sessions` at the shared `target` folder.
+/// Idempotent: creates the symlink, repoints a stale one, or migrates a real
+/// directory's contents into `target` before replacing it with the symlink.
+/// The account's window must not be running when this is called.
+pub fn link_code_sessions(account: &Account, target: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+    std::fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
+    std::fs::create_dir_all(account.data_dir())?;
+    let link = account.data_dir().join(CODE_SESSIONS);
+
+    match std::fs::symlink_metadata(&link) {
+        Ok(md) if md.file_type().is_symlink() => {
+            if std::fs::read_link(&link).ok().as_deref() != Some(target) {
+                std::fs::remove_file(&link)?;
+                symlink(target, &link)?;
+            }
+        }
+        Ok(md) if md.is_dir() => {
+            // Migrate any real session data into the shared folder, then swap
+            // the directory for a symlink.
+            merge_move(&link, target)?;
+            let _ = std::fs::remove_dir_all(&link);
+            symlink(target, &link)?;
+        }
+        Ok(_) => {
+            std::fs::remove_file(&link)?;
+            symlink(target, &link)?;
+        }
+        Err(_) => {
+            symlink(target, &link)?;
+        }
+    }
+    Ok(())
+}
+
+/// Move entries from `src` into `dst`, recursing on directory-name collisions
+/// and skipping file collisions (meld dedups identical chats anyway).
+fn merge_move(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if !paths::exists(&to) {
+            std::fs::rename(&from, &to)?;
+        } else if entry.file_type()?.is_dir() && to.is_dir() {
+            merge_move(&from, &to)?;
+        }
+        // else: a conflicting file already exists in the shared folder — leave
+        // the shared copy; meld reconciles content-level differences.
+    }
+    Ok(())
+}
+
 /// Atomic write (temp + rename) — the one filesystem primitive guise still needs.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {

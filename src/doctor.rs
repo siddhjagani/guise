@@ -2,6 +2,7 @@
 
 use crate::account;
 use crate::app::{self, AppControl};
+use crate::config::ToolConfig;
 use crate::paths::Paths;
 use anyhow::Result;
 use serde::Serialize;
@@ -20,6 +21,8 @@ pub struct AccountHealth {
     pub email: Option<String>,
     pub running: bool,
     pub initialized: bool,
+    /// Chats symlinked into the shared meld folder.
+    pub chats_shared: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +60,23 @@ pub fn run(paths: &Paths) -> Result<Report> {
         },
     });
 
+    let cfg = ToolConfig::load(paths).unwrap_or_default();
+    let sessions_target = if let Some(r) = &cfg.code_sessions_root {
+        std::path::PathBuf::from(r)
+    } else {
+        account::meld_sessions_root(&paths.meld_config())
+            .unwrap_or_else(|| paths.default_code_sessions_root())
+    };
+    checks.push(Check {
+        name: "meld chat sharing".into(),
+        ok: true,
+        detail: if cfg.share_code_sessions {
+            format!("on → {}", sessions_target.display())
+        } else {
+            "off (guise config set share-code-sessions on)".into()
+        },
+    });
+
     let ctrl = app::control();
     let mut accounts = Vec::new();
     for a in account::list_accounts(paths)? {
@@ -64,12 +84,14 @@ pub fn run(paths: &Paths) -> Result<Report> {
         // "Initialized" = Claude has written into the data dir at least once
         // (i.e. the account has been opened and presumably logged in).
         let initialized = a.data_dir().join("config.json").exists();
+        let chats_shared = account::is_code_sessions_linked(&a, &sessions_target);
         accounts.push(AccountHealth {
             slot: a.meta.slot,
             name: a.meta.name.clone(),
             email: a.meta.email.clone(),
             running,
             initialized,
+            chats_shared,
         });
     }
 
@@ -103,9 +125,17 @@ pub fn print_human(report: &Report) {
             } else {
                 "  (not signed in yet — run `guise open` and log in)"
             };
+            let shared = if a.chats_shared {
+                "  ↔ chats shared"
+            } else {
+                ""
+            };
             match &a.email {
-                Some(e) => println!("    {}. {}  ·  {}{}{}", a.slot, a.name, e, dot, state),
-                None => println!("    {}. {}{}{}", a.slot, a.name, dot, state),
+                Some(e) => println!(
+                    "    {}. {}  ·  {}{}{}{}",
+                    a.slot, a.name, e, dot, state, shared
+                ),
+                None => println!("    {}. {}{}{}{}", a.slot, a.name, dot, state, shared),
             }
         }
     }
