@@ -8,8 +8,11 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Default macOS application bundle location.
+/// Default Claude Desktop location (`.app` bundle on macOS, executable on Windows).
+#[cfg(target_os = "macos")]
 pub const DEFAULT_APP_PATH: &str = "/Applications/Claude.app";
+#[cfg(target_os = "windows")]
+pub const DEFAULT_APP_PATH: &str = "C:\\Program Files\\AnthropicClaude\\Claude.exe";
 
 /// Resolved, machine-specific locations guise operates on.
 #[derive(Debug, Clone)]
@@ -41,9 +44,17 @@ impl Paths {
         })
     }
 
-    /// The Claude Desktop executable inside the bundle.
+    /// The Claude Desktop executable. On Windows `app` is already the `.exe`;
+    /// on macOS it's inside the bundle.
     pub fn app_binary(&self) -> PathBuf {
-        self.app.join("Contents").join("MacOS").join("Claude")
+        #[cfg(target_os = "macos")]
+        {
+            self.app.join("Contents").join("MacOS").join("Claude")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.app.clone()
+        }
     }
 
     /// Directory holding one subdirectory per saved account.
@@ -59,11 +70,22 @@ impl Paths {
     /// Claude's standard `claude-code-sessions` location (also meld's default
     /// `sessions_root`). Used as the shared target so `meld` can merge chats.
     pub fn default_code_sessions_root(&self) -> PathBuf {
-        self.home
-            .join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("claude-code-sessions")
+        #[cfg(target_os = "macos")]
+        {
+            self.home
+                .join("Library")
+                .join("Application Support")
+                .join("Claude")
+                .join("claude-code-sessions")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.home
+                .join("AppData")
+                .join("Roaming")
+                .join("Claude")
+                .join("claude-code-sessions")
+        }
     }
 
     /// meld's config file, if the user has meld installed.
@@ -72,12 +94,25 @@ impl Paths {
     }
 }
 
-/// Resolve the home directory from `$HOME`.
+/// Resolve the home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows).
 pub fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| anyhow!("$HOME is not set; cannot locate the home directory"))
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| {
+                anyhow!("%USERPROFILE% (or $HOME) is not set; cannot locate the home directory")
+            })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| anyhow!("$HOME is not set; cannot locate the home directory"))
+    }
 }
 
 /// Whether a path exists (file, dir, or symlink).

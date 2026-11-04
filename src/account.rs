@@ -213,12 +213,20 @@ pub fn meld_sessions_root(meld_config: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Is this account's `claude-code-sessions` already a symlink to `target`?
+/// Is this account's `claude-code-sessions` already linked to `target`?
 pub fn is_code_sessions_linked(account: &Account, target: &Path) -> bool {
-    let link = account.data_dir().join(CODE_SESSIONS);
-    std::fs::read_link(&link)
-        .map(|t| t == target)
-        .unwrap_or(false)
+    #[cfg(unix)]
+    {
+        let link = account.data_dir().join(CODE_SESSIONS);
+        std::fs::read_link(&link)
+            .map(|t| t == target)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (account, target);
+        false
+    }
 }
 
 /// This account's Claude account UUID, read from its own `config.json` (only
@@ -251,33 +259,44 @@ pub fn ensure_meld_account_folder(account: &Account, target: &Path) -> Result<()
 /// directory's contents into `target` before replacing it with the symlink.
 /// The account's window must not be running when this is called.
 pub fn link_code_sessions(account: &Account, target: &Path) -> Result<()> {
-    use std::os::unix::fs::symlink;
     std::fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
     std::fs::create_dir_all(account.data_dir())?;
     let link = account.data_dir().join(CODE_SESSIONS);
 
-    match std::fs::symlink_metadata(&link) {
-        Ok(md) if md.file_type().is_symlink() => {
-            if std::fs::read_link(&link).ok().as_deref() != Some(target) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        match std::fs::symlink_metadata(&link) {
+            Ok(md) if md.file_type().is_symlink() => {
+                if std::fs::read_link(&link).ok().as_deref() != Some(target) {
+                    std::fs::remove_file(&link)?;
+                    symlink(target, &link)?;
+                }
+            }
+            Ok(md) if md.is_dir() => {
+                // Migrate any real session data into the shared folder, then swap
+                // the directory for a symlink.
+                merge_move(&link, target)?;
+                let _ = std::fs::remove_dir_all(&link);
+                symlink(target, &link)?;
+            }
+            Ok(_) => {
                 std::fs::remove_file(&link)?;
                 symlink(target, &link)?;
             }
-        }
-        Ok(md) if md.is_dir() => {
-            // Migrate any real session data into the shared folder, then swap
-            // the directory for a symlink.
-            merge_move(&link, target)?;
-            let _ = std::fs::remove_dir_all(&link);
-            symlink(target, &link)?;
-        }
-        Ok(_) => {
-            std::fs::remove_file(&link)?;
-            symlink(target, &link)?;
-        }
-        Err(_) => {
-            symlink(target, &link)?;
+            Err(_) => {
+                symlink(target, &link)?;
+            }
         }
     }
+
+    // Non-unix (e.g. Windows): best-effort copy instead of symlink, since
+    // junctions/symlinks aren't portable and meld isn't a Windows tool.
+    #[cfg(not(unix))]
+    {
+        let _ = merge_move(&link, target);
+    }
+
     Ok(())
 }
 

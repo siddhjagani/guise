@@ -49,12 +49,19 @@ brew install siddhjagani/tap/guise
 
 **From source** (needs a Rust toolchain):
 
+macOS:
 ```console
 git clone https://github.com/siddhjagani/guise
 cd guise && ./install.sh
 ```
 
-macOS only for now (Apple Silicon + Intel). Run `guise doctor` any time to check
+Windows:
+```powershell
+git clone https://github.com/siddhjagani/guise
+cd guise && ./install.ps1
+```
+
+macOS (Apple Silicon + Intel) and Windows. Run `guise doctor` any time to check
 things are in order.
 
 ## Get started
@@ -176,18 +183,24 @@ Add `--json` to `guise ls` or `guise doctor` for scriptable output.
 
 ## Good to know
 
-- **macOS only** for now (Apple Silicon + Intel).
-- **Each account stays on this Mac** — the profiles are tied to this machine and
-  aren't meant to be copied elsewhere.
+- **macOS** (Apple Silicon + Intel) and **Windows**. Profiles are tied to this
+  machine and aren't meant to be copied elsewhere.
 - Running two Claude windows uses roughly twice the memory of one — expected,
   since they're two real app instances.
 
 ## Uninstall
 
+macOS:
 ```console
 rm "$(which guise)"      # remove the program
 rm -rf ~/.config/guise   # remove your saved accounts (optional)
 rm -f ~/.guise           # remove the compatibility symlink, if present
+```
+
+Windows:
+```powershell
+Remove-Item $env:LOCALAPPDATA\guise\bin\guise.exe
+Remove-Item -Recurse -Force $env:USERPROFILE\.config\guise  # remove saved accounts (optional)
 ```
 
 ## License

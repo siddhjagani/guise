@@ -1,17 +1,14 @@
-# guise installer (Windows placeholder).
+# guise installer (Windows).
 #
-# NOTE: guise v1 supports macOS only. The storage/keychain layer is written
-# behind a `CredentialBackend` trait so a Windows (DPAPI + %APPDATA%\Claude)
-# backend can be added later, but it is not implemented yet. This script builds
-# the binary so contributors can work on that backend.
+#   powershell -ExecutionPolicy Bypass -File install.ps1
+#
+# Builds from source and installs the `guise.exe` binary to
+# %LOCALAPPDATA%\guise\bin. Add that dir to your PATH to run `guise` directly.
 
 $ErrorActionPreference = "Stop"
 
 $RepoDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BinName = "guise.exe"
-
-Write-Host "guise v1 targets macOS. On Windows this only builds the binary; the"
-Write-Host "Windows CredentialBackend is not implemented yet." -ForegroundColor Yellow
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     Write-Error "cargo (the Rust toolchain) is required. Install from https://rustup.rs"
@@ -27,3 +24,4 @@ Copy-Item -Force (Join-Path $RepoDir "target\release\$BinName") (Join-Path $Inst
 
 Write-Host "Installed to $InstallDir\$BinName"
 Write-Host "Add $InstallDir to your PATH to run 'guise' directly."
+Write-Host "Run 'guise doctor' to verify your setup, then 'guise add <name>'."
