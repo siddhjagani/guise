@@ -66,4 +66,4 @@ cargo build --release  # optimized single binary
   rather than `#[cfg]`-ing call sites.
 - When testing anything that reads real Claude data, use a synthetic `HOME`
   (see the test helpers) — do not read the user's live session stores.
-- macOS only for v1. Windows/Linux backends are stubbed (`Unsupported`).
+- macOS and Windows are supported. Linux remains unsupported (`Unsupported`).

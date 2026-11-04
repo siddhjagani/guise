@@ -6,7 +6,7 @@ description = "Wear a different account's guise on Claude Desktop — instant, l
 license = "MIT"
 repository = "https://github.com/siddhjagani/guise"
 readme = "README.md"
-keywords = ["claude", "anthropic", "macos", "account-switcher", "cli"]
+keywords = ["claude", "anthropic", "macos", "windows", "account-switcher", "cli"]
 categories = ["command-line-utilities"]
 
 [[bin]]
