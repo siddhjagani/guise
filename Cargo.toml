@@ -1,6 +1,6 @@
 [package]
 name = "guise"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 description = "Wear a different account's guise on Claude Desktop — instant, local, non-destructive account switching."
 license = "MIT"
