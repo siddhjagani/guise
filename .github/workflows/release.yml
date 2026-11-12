@@ -1,13 +1,20 @@
 name: release
 
-# Build a universal macOS binary and attach it to the GitHub Release whenever a
+# Build the release binaries and attach them to the GitHub Release whenever a
 # version tag is pushed:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# The resulting `guise-macos.tar.gz` is what install.sh and the Homebrew formula
-# download. The printed `guise-macos.tar.gz.sha256` is the value to paste into
-# the Homebrew formula (see Formula/guise.rb).
+# Assets (each with a matching `<asset>.sha256`):
+#   guise-macos.tar.gz          universal macOS binary; downloaded by install.sh
+#                               and the Homebrew formula. The printed
+#                               `guise-macos.tar.gz.sha256` is the value to paste
+#                               into the formula (see Formula/guise.rb).
+#   guise-windows-x86_64.zip    guise.exe for x64 Windows    } downloaded by
+#   guise-windows-aarch64.zip   guise.exe for ARM64 Windows  } install.ps1
+#
+# Build jobs only upload workflow artifacts; a single publish job creates the
+# release with every file, so two jobs never race to create it.
 
 on:
   push:
@@ -15,10 +22,10 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,10 +50,67 @@ jobs:
           tar -czf guise-macos.tar.gz guise
           shasum -a 256 guise-macos.tar.gz | tee guise-macos.tar.gz.sha256
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guise-macos
+          path: guise-macos.tar.gz*
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    env:
+      # Statically link the MSVC runtime so users need no VC++ redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with both Windows targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+
+      # ARM64 is cross-compiled on the x64 runner (MSVC ships the ARM64 tools).
+      - name: Build (x64 + ARM64)
+        shell: bash
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Smoke test (x64)
+        shell: bash
+        run: target/x86_64-pc-windows-msvc/release/guise.exe --version
+
+      - name: Zip + checksums
+        shell: pwsh
+        run: |
+          foreach ($arch in 'x86_64', 'aarch64') {
+            $zip = "guise-windows-$arch.zip"
+            Compress-Archive -LiteralPath "target/$arch-pc-windows-msvc/release/guise.exe" -DestinationPath $zip
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+            # Same "<hex>  <file>\n" format as `shasum -a 256` on macOS.
+            Set-Content -LiteralPath "$zip.sha256" -Value "$hash  $zip`n" -NoNewline
+            Get-Content -LiteralPath "$zip.sha256"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guise-windows
+          path: guise-windows-*.zip*
+          if-no-files-found: error
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            guise-macos.tar.gz
-            guise-macos.tar.gz.sha256
+          files: dist/*
           generate_release_notes: true

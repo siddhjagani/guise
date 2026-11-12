@@ -6,22 +6,30 @@ use crate::paths::Paths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-fn default_true() -> bool {
-    true
+/// Chat sharing is on by default on macOS only. On Windows it relies on a
+/// junction inside the profile, which is untested against Claude Desktop's
+/// check for redirected private folders (a failing check silently drops new
+/// chats), so there it is opt-in.
+fn default_share() -> bool {
+    !cfg!(windows)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// Override for the `Claude.app` bundle path, if not at the default.
+    /// Override for where Claude Desktop is (`Claude.app` on macOS,
+    /// the Claude executable on Windows), if not at the default.
     #[serde(default)]
     pub app_path: Option<String>,
 
     /// Point every account's `claude-code-sessions` at one shared folder so
-    /// `meld` can merge Claude Code chats across accounts. On by default; it's
-    /// inert if you don't use meld (each account still only shows its own
-    /// chats until meld copies the others in). See README "Works with meld".
-    #[serde(default = "default_true")]
-    pub share_code_sessions: bool,
+    /// `meld` can merge Claude Code chats across accounts. On by default on
+    /// macOS (off on Windows, see `default_share`); it's inert if you don't
+    /// use meld (each account still only shows its own chats until meld
+    /// copies the others in).
+    /// Only an explicit `config set` is saved, so the platform default applies
+    /// otherwise; read it through `sharing()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_code_sessions: Option<bool>,
 
     /// Where the shared `claude-code-sessions` lives. Defaults to meld's
     /// configured `sessions_root`, else Claude's standard location.
@@ -29,17 +37,12 @@ pub struct ToolConfig {
     pub code_sessions_root: Option<String>,
 }
 
-impl Default for ToolConfig {
-    fn default() -> Self {
-        ToolConfig {
-            app_path: None,
-            share_code_sessions: true,
-            code_sessions_root: None,
-        }
-    }
-}
-
 impl ToolConfig {
+    /// Is chat sharing on (the explicit setting, else the platform default)?
+    pub fn sharing(&self) -> bool {
+        self.share_code_sessions.unwrap_or_else(default_share)
+    }
+
     pub fn load(paths: &Paths) -> Result<Self> {
         let p = paths.tool_config_json();
         if !p.exists() {

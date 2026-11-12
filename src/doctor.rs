@@ -21,7 +21,7 @@ pub struct AccountHealth {
     pub email: Option<String>,
     pub running: bool,
     pub initialized: bool,
-    /// Chats symlinked into the shared meld folder.
+    /// Chats linked into the shared meld folder.
     pub chats_shared: bool,
 }
 
@@ -35,19 +35,28 @@ pub struct Report {
 pub fn run(paths: &Paths) -> Result<Report> {
     let mut checks = Vec::new();
 
-    let app_ok = paths.app.exists();
+    let mut healthy = paths.app_present();
     checks.push(Check {
-        name: "Claude.app".into(),
-        ok: app_ok,
+        name: if cfg!(target_os = "macos") {
+            "Claude.app"
+        } else {
+            "Claude Desktop"
+        }
+        .into(),
+        ok: healthy,
         detail: paths.app.display().to_string(),
     });
 
-    let bin_ok = paths.app_binary().exists();
-    checks.push(Check {
-        name: "Claude executable".into(),
-        ok: bin_ok,
-        detail: paths.app_binary().display().to_string(),
-    });
+    // On Windows `app` already is the executable.
+    if cfg!(target_os = "macos") {
+        let bin_ok = paths.app_binary().exists();
+        healthy &= bin_ok;
+        checks.push(Check {
+            name: "Claude executable".into(),
+            ok: bin_ok,
+            detail: paths.app_binary().display().to_string(),
+        });
+    }
 
     let store_ok = paths.guise_root.exists();
     checks.push(Check {
@@ -70,7 +79,7 @@ pub fn run(paths: &Paths) -> Result<Report> {
     checks.push(Check {
         name: "meld chat sharing".into(),
         ok: true,
-        detail: if cfg.share_code_sessions {
+        detail: if cfg.sharing() {
             format!("on → {}", sessions_target.display())
         } else {
             "off (guise config set share-code-sessions on)".into()
@@ -95,7 +104,6 @@ pub fn run(paths: &Paths) -> Result<Report> {
         });
     }
 
-    let healthy = app_ok && bin_ok;
     Ok(Report {
         checks,
         accounts,

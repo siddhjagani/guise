@@ -4,10 +4,11 @@ Guidance for working in this repo with Claude Code.
 
 ## What this is
 
-`guise` is a macOS CLI that switches the logged-in account of **Claude Desktop**
-(`/Applications/Claude.app`) instantly, without logout/relogin. It snapshots each
-account's full desktop session once, then swaps between them as an atomic,
-backed-up transaction. See [README.md](README.md) and [PLAN.md](PLAN.md).
+`guise` is a macOS and Windows CLI that keeps several **Claude Desktop** accounts
+logged in side by side: each account is its own permanent userData directory,
+and guise launches Claude against it with `--user-data-dir`. See
+[README.md](README.md) and [PLAN.md](PLAN.md) (PLAN.md describes the original
+snapshot-and-swap design).
 
 ## Core invariants — do not break these
 
@@ -35,35 +36,34 @@ backed-up transaction. See [README.md](README.md) and [PLAN.md](PLAN.md).
 
 | File | Responsibility |
 |---|---|
-| `src/paths.rs` | Resolve userData dir / `Claude.app` / `~/.guise`; the matched-set list. |
-| `src/config.rs` | `~/.guise/config.json` tool settings (active slot, prefs). |
-| `src/keychain.rs` | `CredentialBackend` trait; macOS impl shells out to `/usr/bin/security`. Presence checks + `--with-cli` credential r/w. |
-| `src/app.rs` | `AppControl` trait; detect/quit/relaunch Claude Desktop, poll LOCK release. |
-| `src/profile.rs` | Capture/restore the matched set, `meta.json`, atomic fs primitives, plaintext identity detection. |
-| `src/swap.rs` | The transactional switch (`Sys`-injected) + `add`/`undo`/`rm` + rollback. |
-| `src/doctor.rs` | Read-only environment + integrity diagnostics. |
+| `src/paths.rs` | Home dir, Claude Desktop location (`Claude.app`; on Windows the detected `claude.exe`), the `~/.config/guise` store (+ legacy `~/.guise` migration). |
+| `src/config.rs` | `config.json` tool settings (`app-path`, chat sharing). |
+| `src/account.rs` | Saved accounts (`meta.json` + a `data/` userData dir each), atomic writes, the meld `claude-code-sessions` link (symlink on macOS, junction on Windows). |
+| `src/app.rs` | `AppControl` trait: launch/detect/focus/quit one account's instance by its `--user-data-dir`. macOS: `open`/`pgrep`/`kill`. Windows: direct detached spawn, native process command-line listing, `taskkill`. |
+| `src/doctor.rs` | Read-only environment + account diagnostics. |
 | `src/cli.rs` | clap surface, the ambiguity rule, dispatch, interactive picker. |
 | `src/main.rs` | Thin entrypoint. |
 
 ## Testability seam
 
-`swap::switch` / `add` / `undo` take a `Sys { app: &dyn AppControl, keychain:
-&dyn CredentialBackend }`. Production passes `RealApp` + the real Keychain
-backend; tests pass fakes so the full transaction (quit → backup → restore →
-verify → relaunch) can run against a synthetic `HOME` **without touching the real
-Claude Desktop or Keychain**. Keep this seam — it is how the swap logic is
-tested. See the `#[cfg(test)]` modules in `swap.rs` and `profile.rs`.
+Process control sits behind the `AppControl` trait (`RealApp` in production).
+Account/link tests run against a synthetic `HOME` from `temp_paths` in
+`account.rs` — they never touch the real Claude Desktop or its profiles. The
+Windows command-line matcher in `app.rs` is pure and tested on every platform.
 
 ## Working here
 
 ```sh
 cargo build            # debug
-cargo test             # unit + multi-account integration tests
+cargo test             # unit tests
 cargo build --release  # optimized single binary
+cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings  # check Windows code from a Mac
+pwsh tests/windows/e2e.ps1   # Windows only, after a release build: drives guise.exe against a stand-in Claude
 ```
 
-- Prefer adding new platform backends behind `CredentialBackend` / `AppControl`
-  rather than `#[cfg]`-ing call sites.
+- Prefer adding new platform backends behind `AppControl` rather than
+  `#[cfg]`-ing call sites.
 - When testing anything that reads real Claude data, use a synthetic `HOME`
   (see the test helpers) — do not read the user's live session stores.
-- macOS and Windows are supported. Linux remains unsupported (`Unsupported`).
+- macOS and Windows are supported (CI runs both). Linux remains unsupported
+  (`Unsupported`).
