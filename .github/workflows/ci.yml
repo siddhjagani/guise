@@ -7,7 +7,11 @@ on:
 
 jobs:
   check:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -21,3 +25,8 @@ jobs:
         run: cargo test
       - name: Build (release)
         run: cargo build --release
+      - name: End-to-end (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: ./tests/windows/e2e.ps1

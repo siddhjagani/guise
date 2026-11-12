@@ -8,11 +8,48 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Default Claude Desktop location (`.app` bundle on macOS, executable on Windows).
-#[cfg(target_os = "macos")]
-pub const DEFAULT_APP_PATH: &str = "/Applications/Claude.app";
-#[cfg(target_os = "windows")]
-pub const DEFAULT_APP_PATH: &str = "C:\\Program Files\\AnthropicClaude\\Claude.exe";
+/// Where Claude Desktop is installed, unless `app-path` overrides it: the
+/// `.app` bundle on macOS; on Windows the first Claude executable found among the
+/// known install locations.
+fn default_app_path(home: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        let local = env_dir("LOCALAPPDATA").unwrap_or_else(|| home.join("AppData").join("Local"));
+        first_existing(windows_app_candidates(&local))
+    } else {
+        PathBuf::from("/Applications/Claude.app")
+    }
+}
+
+/// A directory named by an environment variable, if it is set.
+fn env_dir(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Claude Desktop's possible Windows locations, most likely first.
+fn windows_app_candidates(local: &Path) -> Vec<PathBuf> {
+    let aliases = local.join("Microsoft").join("WindowsApps");
+    vec![
+        // The packaged (MSIX) app from claude.ai/download: its app execution
+        // alias, which stays put across updates and passes arguments through.
+        // The per-package copy can't resolve to a different build.
+        aliases
+            .join("Claude_pzs8sxrjxfjjc")
+            .join("claude-desktop.exe"),
+        aliases.join("claude-desktop.exe"),
+        // The legacy per-user .exe install. Its top-level claude.exe survives
+        // updates and forwards arguments to the current version.
+        local.join("AnthropicClaude").join("claude.exe"),
+    ]
+}
+
+/// The first candidate that exists, else the first (most likely) one, so a
+/// "not found" message names the usual location.
+fn first_existing(candidates: Vec<PathBuf>) -> PathBuf {
+    let found = candidates.iter().position(|p| exists(p)).unwrap_or(0);
+    candidates.into_iter().nth(found).unwrap_or_default()
+}
 
 /// Resolved, machine-specific locations guise operates on.
 #[derive(Debug, Clone)]
@@ -20,7 +57,7 @@ pub struct Paths {
     /// `~` — the user's home directory. Retained for path construction/tests.
     #[allow(dead_code)]
     pub home: PathBuf,
-    /// `Claude.app` bundle.
+    /// Claude Desktop: the `Claude.app` bundle (macOS) or the Claude executable (Windows).
     pub app: PathBuf,
     /// Root of the account store (`~/.config/guise` or legacy `~/.guise`).
     pub guise_root: PathBuf,
@@ -39,9 +76,33 @@ impl Paths {
         let guise_root = resolve_guise_root(&home)?;
         Ok(Paths {
             home: home.clone(),
-            app: PathBuf::from(DEFAULT_APP_PATH),
+            app: default_app_path(&home),
             guise_root,
         })
+    }
+
+    /// Is Claude Desktop at `app`? An `.app` bundle on macOS; on Windows an
+    /// `.exe`, possibly an app execution alias (a link only
+    /// `symlink_metadata` can see, so not `Path::exists`).
+    pub fn app_present(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.app.is_dir()
+        } else {
+            exists(&self.app) && !self.app.is_dir()
+        }
+    }
+
+    /// Fail with a helpful message unless Claude Desktop is at `app`.
+    pub fn require_app(&self) -> Result<()> {
+        if self.app_present() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Claude Desktop not found at {} — install it from https://claude.ai/download, \
+             or point guise at it with `guise config set app-path <path>` \
+             (`auto` restores detection)",
+            self.app.display()
+        ))
     }
 
     /// The Claude Desktop executable. On Windows `app` is already the `.exe`;
@@ -67,30 +128,30 @@ impl Paths {
         self.guise_root.join("config.json")
     }
 
-    /// Claude's standard `claude-code-sessions` location (also meld's default
-    /// `sessions_root`). Used as the shared target so `meld` can merge chats.
+    /// Default shared `claude-code-sessions` folder, used when meld has no
+    /// `sessions_root`. macOS: Claude's standard location (also meld's
+    /// default). Windows: a folder in guise's own store — outside AppData, so
+    /// the MSIX app's file virtualization never redirects it; point meld's
+    /// `sessions_root` at it.
     pub fn default_code_sessions_root(&self) -> PathBuf {
-        #[cfg(target_os = "macos")]
-        {
+        if cfg!(target_os = "macos") {
             self.home
                 .join("Library")
                 .join("Application Support")
                 .join("Claude")
                 .join("claude-code-sessions")
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.home
-                .join("AppData")
-                .join("Roaming")
-                .join("Claude")
-                .join("claude-code-sessions")
+        } else {
+            self.guise_root.join("claude-code-sessions")
         }
     }
 
-    /// meld's config file, if the user has meld installed.
+    /// meld's config file, if the user has meld installed. meld finds its
+    /// home via `$HOME` first, then the platform home, so do the same.
     pub fn meld_config(&self) -> PathBuf {
-        self.home.join(".meld").join("config.toml")
+        env_dir("HOME")
+            .unwrap_or_else(|| self.home.clone())
+            .join(".meld")
+            .join("config.toml")
     }
 }
 
@@ -118,16 +179,6 @@ pub fn home_dir() -> Result<PathBuf> {
 /// Whether a path exists (file, dir, or symlink).
 pub fn exists(p: &Path) -> bool {
     p.symlink_metadata().is_ok()
-}
-
-/// Validate that a directory exists, returning a helpful error otherwise.
-pub fn require_dir(p: &Path, what: &str) -> Result<()> {
-    let md =
-        std::fs::metadata(p).with_context(|| format!("{what} not found at {}", p.display()))?;
-    if !md.is_dir() {
-        return Err(anyhow!("{what} at {} is not a directory", p.display()));
-    }
-    Ok(())
 }
 
 /// Determine the guise root directory, migrating from `~/.guise` to
@@ -175,4 +226,31 @@ fn migrate_legacy_to_xdg(legacy: &Path, xdg: &Path) -> Result<()> {
         xdg.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_app_detection_prefers_the_packaged_app() {
+        let local = std::env::temp_dir().join(format!("guise-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&local);
+        let candidates = windows_app_candidates(&local);
+        let (alias, legacy) = (candidates[1].clone(), candidates[2].clone());
+        let touch = |p: &Path| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        };
+
+        // Nothing installed: name the usual location.
+        assert_eq!(first_existing(candidates.clone()), candidates[0]);
+        // Only the legacy install: use it.
+        touch(&legacy);
+        assert_eq!(first_existing(candidates.clone()), legacy);
+        // The packaged app wins over the legacy install.
+        touch(&alias);
+        assert_eq!(first_existing(candidates), alias);
+        let _ = std::fs::remove_dir_all(&local);
+    }
 }

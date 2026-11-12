@@ -135,7 +135,7 @@ fn code_sessions_target(paths: &Paths, cfg: &ToolConfig) -> std::path::PathBuf {
 /// into the shared folder (so meld can merge). Best-effort: never blocks a
 /// launch. Only safe when the account's window is NOT running.
 fn ensure_shared_sessions(paths: &Paths, cfg: &ToolConfig, account: &Account) {
-    if !cfg.share_code_sessions {
+    if !cfg.sharing() {
         return;
     }
     let target = code_sessions_target(paths, cfg);
@@ -152,12 +152,12 @@ fn ensure_shared_sessions(paths: &Paths, cfg: &ToolConfig, account: &Account) {
 
 /// Ensure an account's window is open (launch if needed) and bring it forward.
 fn open_account(paths: &Paths, account: &Account) -> Result<()> {
-    crate::paths::require_dir(&paths.app, "Claude.app")?;
+    paths.require_app()?;
     let ctrl = app::control();
     let data = account.data_dir();
 
     if ctrl.is_instance_running(&data)? {
-        ctrl.activate(&paths.app)?;
+        ctrl.activate(&paths.app, &data)?;
         println!(
             "✓ {} is already open — bringing it to the front.",
             account.meta.name
@@ -170,6 +170,7 @@ fn open_account(paths: &Paths, account: &Account) -> Result<()> {
     ensure_shared_sessions(paths, &cfg, account);
 
     ctrl.launch_instance(&paths.app, &data)?;
+    warn_if_not_started(&ctrl, account);
 
     // Record last-opened (best effort).
     let mut updated = account.clone();
@@ -182,7 +183,7 @@ fn open_account(paths: &Paths, account: &Account) -> Result<()> {
 
 /// Open every saved account's window (launch the ones not already running).
 fn open_all(paths: &Paths) -> Result<()> {
-    crate::paths::require_dir(&paths.app, "Claude.app")?;
+    paths.require_app()?;
     let accounts = account::list_accounts(paths)?;
     if accounts.is_empty() {
         println!("No saved accounts yet. Run `guise add <name>`.");
@@ -198,7 +199,7 @@ fn open_all(paths: &Paths) -> Result<()> {
         ensure_shared_sessions(paths, &cfg, a);
         ctrl.launch_instance(&paths.app, &a.data_dir())?;
         opened += 1;
-        // Small stagger so simultaneous launches don't race LaunchServices.
+        // Small stagger so simultaneous launches don't race each other.
         std::thread::sleep(Duration::from_millis(700));
     }
     println!(
@@ -211,18 +212,47 @@ fn open_all(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Windows only: some Claude builds ignore `--user-data-dir` and hand the
+/// launch to the normal profile, so check this account's instance really
+/// started rather than silently report success.
+fn warn_if_not_started(ctrl: &dyn AppControl, account: &Account) {
+    if !cfg!(windows) {
+        return;
+    }
+    for _ in 0..40 {
+        if ctrl
+            .is_instance_running(&account.data_dir())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    eprintln!(
+        "note: Claude didn't open {}'s own profile — it may have switched to your normal \
+         Claude window instead. Update Claude Desktop and try again.",
+        account.meta.name
+    );
+}
+
 /// Create a new account and open a fresh window for the user to log into.
 fn add_account(paths: &Paths, name: &str, email: Option<String>) -> Result<()> {
-    crate::paths::require_dir(&paths.app, "Claude.app")?;
+    paths.require_app()?;
     let account = account::create_account(paths, name, email, now())?;
     let cfg = ToolConfig::load(paths).unwrap_or_default();
     ensure_shared_sessions(paths, &cfg, &account);
     let ctrl = app::control();
     ctrl.launch_instance(&paths.app, &account.data_dir())?;
+    warn_if_not_started(&ctrl, &account);
     println!(
         "✓ Created {}. A fresh Claude window is opening — log into this account there.\n  From now on: `guise {}` reopens it, already logged in.",
         account.meta.name, account.meta.name
     );
+    if cfg!(windows) {
+        // Browser sign-in (Google/Apple/SSO) returns via claude://, which Windows
+        // always routes to the default Claude profile, never this window.
+        println!("  Sign in with \"Continue with email\" and enter the code in that window.");
+    }
     Ok(())
 }
 
@@ -327,27 +357,24 @@ fn parse_on_off(v: &str) -> Result<bool> {
 
 fn config_cmd(paths: &Paths, action: Option<ConfigAction>) -> Result<()> {
     let mut cfg = ToolConfig::load(paths)?;
-    let app_path = |c: &ToolConfig| {
-        c.app_path
-            .clone()
-            .unwrap_or_else(|| crate::paths::DEFAULT_APP_PATH.to_string())
-    };
+    // `paths.app` already reflects the configured override, else the detected install.
+    let app_path = paths.app.display().to_string();
     let sessions_root = |c: &ToolConfig| code_sessions_target(paths, c).display().to_string();
     match action {
         None => {
-            println!("app-path            = {}", app_path(&cfg));
+            println!("app-path            = {app_path}");
             println!(
                 "share-code-sessions = {}",
-                if cfg.share_code_sessions { "on" } else { "off" }
+                if cfg.sharing() { "on" } else { "off" }
             );
             println!("code-sessions-root  = {}", sessions_root(&cfg));
             Ok(())
         }
         Some(ConfigAction::Get { key }) => {
             let val = match key.as_str() {
-                "app-path" => app_path(&cfg),
+                "app-path" => app_path,
                 "share-code-sessions" => {
-                    if cfg.share_code_sessions {
+                    if cfg.sharing() {
                         "on".into()
                     } else {
                         "off".into()
@@ -361,9 +388,11 @@ fn config_cmd(paths: &Paths, action: Option<ConfigAction>) -> Result<()> {
         }
         Some(ConfigAction::Set { key, value }) => {
             match key.as_str() {
-                "app-path" => cfg.app_path = Some(value.clone()),
-                "share-code-sessions" => cfg.share_code_sessions = parse_on_off(&value)?,
-                "code-sessions-root" => cfg.code_sessions_root = Some(value.clone()),
+                "app-path" => cfg.app_path = (value != "auto").then(|| value.clone()),
+                "share-code-sessions" => cfg.share_code_sessions = Some(parse_on_off(&value)?),
+                "code-sessions-root" => {
+                    cfg.code_sessions_root = (value != "auto").then(|| value.clone())
+                }
                 other => return Err(anyhow!("unknown config key: {other}")),
             }
             cfg.save(paths)?;

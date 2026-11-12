@@ -26,10 +26,18 @@ else
   INSTALL_DIR="$HOME/.local/bin"
 fi
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "guise currently supports macOS only." >&2
-  exit 1
-fi
+case "$(uname -s)" in
+  Darwin) ;;
+  MINGW* | MSYS* | CYGWIN*)
+    echo "On Windows, install guise from PowerShell instead:" >&2
+    echo "  irm https://raw.githubusercontent.com/$REPO/main/install.ps1 | iex" >&2
+    exit 1
+    ;;
+  *)
+    echo "guise supports macOS and Windows only." >&2
+    exit 1
+    ;;
+esac
 
 # BASH_SOURCE is unset when piped through curl; guard it under `set -u`.
 SCRIPT_SRC="${BASH_SOURCE[0]:-}"

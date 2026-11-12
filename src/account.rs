@@ -180,18 +180,33 @@ pub fn create_account(
     Ok(account)
 }
 
-/// Delete a saved account's directory entirely (its login and history).
+/// Delete a saved account's directory entirely (its login and history). Its
+/// shared-chats link goes first, so the delete can never reach the shared
+/// folder through it.
 pub fn delete_account(account: &Account) -> Result<()> {
-    if paths::exists(&account.dir) {
-        std::fs::remove_dir_all(&account.dir)
-            .with_context(|| format!("removing {}", account.dir.display()))?;
+    let link = account.data_dir().join(CODE_SESSIONS);
+    if is_dir_link(&link) {
+        remove_dir_link(&link).with_context(|| format!("unlinking {}", link.display()))?;
     }
-    Ok(())
+    let mut attempts = 0;
+    loop {
+        match std::fs::remove_dir_all(&account.dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            // Windows keeps a just-quit app's files locked for a moment.
+            Err(_) if cfg!(windows) && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            Err(e) => return Err(e).with_context(|| format!("removing {}", account.dir.display())),
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
-// meld interop: share each account's `claude-code-sessions` via a symlink to
-// one folder, so `meld` can merge Claude Code chats across accounts.
+// meld interop: share each account's `claude-code-sessions` via a link
+// (symlink on macOS, junction on Windows) to one folder, so `meld` can merge
+// Claude Code chats across accounts.
 // --------------------------------------------------------------------------
 
 const CODE_SESSIONS: &str = "claude-code-sessions";
@@ -203,7 +218,8 @@ pub fn meld_sessions_root(meld_config: &Path) -> Option<PathBuf> {
         let l = line.trim();
         if let Some(rest) = l.strip_prefix("sessions_root") {
             if let Some(eq) = rest.find('=') {
-                let v = rest[eq + 1..].trim().trim_matches('"').trim();
+                // meld writes Windows paths as TOML literal strings ('...').
+                let v = rest[eq + 1..].trim().trim_matches(['"', '\'']).trim();
                 if !v.is_empty() {
                     return Some(PathBuf::from(v));
                 }
@@ -215,17 +231,49 @@ pub fn meld_sessions_root(meld_config: &Path) -> Option<PathBuf> {
 
 /// Is this account's `claude-code-sessions` already linked to `target`?
 pub fn is_code_sessions_linked(account: &Account, target: &Path) -> bool {
+    links_to(&account.data_dir().join(CODE_SESSIONS), target)
+}
+
+/// Is `path` a directory link (a symlink, or a junction on Windows)?
+fn is_dir_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Is `link` a link that resolves to the `target` directory?
+fn links_to(link: &Path, target: &Path) -> bool {
+    is_dir_link(link)
+        && matches!(
+            (std::fs::canonicalize(link), std::fs::canonicalize(target)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// Point `link` at the `target` directory. On Windows this is a junction,
+/// which (unlike a symlink) needs no admin rights or Developer Mode.
+fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        let link = account.data_dir().join(CODE_SESSIONS);
-        std::fs::read_link(&link)
-            .map(|t| t == target)
-            .unwrap_or(false)
+        std::os::unix::fs::symlink(target, link)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = (account, target);
-        false
+        // create() makes the directory first; don't leave it behind on failure.
+        junction::create(target, link).inspect_err(|_| {
+            let _ = std::fs::remove_dir(link);
+        })
+    }
+}
+
+/// Remove a directory link itself, never what it points to.
+fn remove_dir_link(link: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        // Junctions and directory symlinks are removed as directories.
+        std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link))
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::remove_file(link)
     }
 }
 
@@ -255,48 +303,57 @@ pub fn ensure_meld_account_folder(account: &Account, target: &Path) -> Result<()
 }
 
 /// Point this account's `claude-code-sessions` at the shared `target` folder.
-/// Idempotent: creates the symlink, repoints a stale one, or migrates a real
-/// directory's contents into `target` before replacing it with the symlink.
+/// Idempotent: creates the link, repoints a stale one, or migrates a real
+/// directory's contents into `target` before replacing it with the link.
 /// The account's window must not be running when this is called.
 pub fn link_code_sessions(account: &Account, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
     std::fs::create_dir_all(account.data_dir())?;
     let link = account.data_dir().join(CODE_SESSIONS);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-        match std::fs::symlink_metadata(&link) {
-            Ok(md) if md.file_type().is_symlink() => {
-                if std::fs::read_link(&link).ok().as_deref() != Some(target) {
-                    std::fs::remove_file(&link)?;
-                    symlink(target, &link)?;
-                }
-            }
-            Ok(md) if md.is_dir() => {
-                // Migrate any real session data into the shared folder, then swap
-                // the directory for a symlink.
-                merge_move(&link, target)?;
-                let _ = std::fs::remove_dir_all(&link);
-                symlink(target, &link)?;
-            }
-            Ok(_) => {
-                std::fs::remove_file(&link)?;
-                symlink(target, &link)?;
-            }
-            Err(_) => {
-                symlink(target, &link)?;
+    let staging = link.with_file_name(format!("{CODE_SESSIONS}.migrating"));
+    let make = || {
+        make_dir_link(target, &link)
+            .with_context(|| format!("linking {} to {}", link.display(), target.display()))
+    };
+    match std::fs::symlink_metadata(&link) {
+        Ok(md) if md.file_type().is_symlink() => {
+            if !links_to(&link, target) {
+                remove_dir_link(&link)?;
+                make()?;
             }
         }
+        Ok(md) if md.is_dir() => {
+            // Swap the real folder for the link before moving anything, so a
+            // link that can't be made leaves the chats where Claude finds them.
+            std::fs::rename(&link, &staging)?;
+            if let Err(e) = make() {
+                let _ = std::fs::rename(&staging, &link);
+                return Err(e);
+            }
+        }
+        Ok(_) => {
+            std::fs::remove_file(&link)?;
+            make()?;
+        }
+        Err(_) => make()?,
     }
-
-    // Non-unix (e.g. Windows): best-effort copy instead of symlink, since
-    // junctions/symlinks aren't portable and meld isn't a Windows tool.
-    #[cfg(not(unix))]
-    {
-        let _ = merge_move(&link, target);
+    // Move the old folder's chats into the shared one (this also finishes an
+    // interrupted run). Files that collided with a chat already there stay
+    // behind: keep them aside rather than delete them.
+    if paths::exists(&staging) {
+        merge_move(&staging, target)?;
+        if !remove_empty_tree(&staging)? {
+            let aside = link.with_file_name(format!("{CODE_SESSIONS}.unmerged"));
+            if paths::exists(&aside) {
+                return Err(anyhow!(
+                    "{} still holds chats that also exist in {}; move it out of the way first",
+                    aside.display(),
+                    target.display()
+                ));
+            }
+            std::fs::rename(&staging, &aside)?;
+        }
     }
-
     Ok(())
 }
 
@@ -317,6 +374,20 @@ fn merge_move(src: &Path, dst: &Path) -> Result<()> {
         // the shared copy; meld reconciles content-level differences.
     }
     Ok(())
+}
+
+/// Remove `dir` if it holds nothing but (nested) empty directories; `true` if
+/// it was removed.
+fn remove_empty_tree(dir: &Path) -> std::io::Result<bool> {
+    let mut empty = true;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        empty &= entry.file_type()?.is_dir() && remove_empty_tree(&entry.path())?;
+    }
+    if empty {
+        std::fs::remove_dir(dir)?;
+    }
+    Ok(empty)
 }
 
 /// Atomic write (temp + rename) — the one filesystem primitive guise still needs.
@@ -389,6 +460,78 @@ mod tests {
         delete_account(&a).unwrap();
         assert!(!a.dir.exists());
         assert!(list_accounts(&paths).unwrap().is_empty());
+    }
+
+    #[test]
+    fn shares_chats_and_delete_spares_the_shared_folder() {
+        let paths = temp_paths("link");
+        let shared = paths.home.join("shared");
+        let a = create_account(&paths, "work", None, "t".into()).unwrap();
+        // Chats the account already has move into the shared folder.
+        let own = a.data_dir().join(CODE_SESSIONS).join("uuid-a");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("chat.json"), "a").unwrap();
+
+        link_code_sessions(&a, &shared).unwrap();
+        assert!(is_code_sessions_linked(&a, &shared));
+        let shared_chat = shared.join("uuid-a").join("chat.json");
+        assert_eq!(std::fs::read_to_string(&shared_chat).unwrap(), "a");
+        assert!(
+            own.join("chat.json").exists(),
+            "still visible through the link"
+        );
+        link_code_sessions(&a, &shared).unwrap(); // idempotent
+
+        // Deleting the account removes its link, never the shared chats.
+        delete_account(&a).unwrap();
+        assert!(!a.dir.exists());
+        assert_eq!(std::fs::read_to_string(&shared_chat).unwrap(), "a");
+    }
+
+    #[test]
+    fn colliding_chats_are_kept_aside_not_deleted() {
+        let paths = temp_paths("collide");
+        let shared = paths.home.join("shared");
+        std::fs::create_dir_all(shared.join("uuid-a")).unwrap();
+        std::fs::write(shared.join("uuid-a").join("chat.json"), "shared").unwrap();
+        let a = create_account(&paths, "work", None, "t".into()).unwrap();
+        let own = a.data_dir().join(CODE_SESSIONS).join("uuid-a");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("chat.json"), "mine").unwrap();
+        std::fs::write(own.join("other.json"), "o").unwrap();
+
+        link_code_sessions(&a, &shared).unwrap();
+        assert!(is_code_sessions_linked(&a, &shared));
+        let aside = a.data_dir().join(format!("{CODE_SESSIONS}.unmerged"));
+        let kept = std::fs::read_to_string(aside.join("uuid-a").join("chat.json")).unwrap();
+        assert_eq!(kept, "mine");
+        assert!(shared.join("uuid-a").join("other.json").exists());
+    }
+
+    #[test]
+    fn reads_meld_sessions_root_in_any_quote_style() {
+        let paths = temp_paths("meld");
+        let cfg = paths.home.join("config.toml");
+        for (line, want) in [
+            (r#"sessions_root = "/a/b""#, "/a/b"),
+            (r"sessions_root = 'C:\Users\me\s'", r"C:\Users\me\s"),
+            (r"sessions_root = '''C:\Users\me\s'''", r"C:\Users\me\s"),
+        ] {
+            std::fs::write(&cfg, line).unwrap();
+            assert_eq!(meld_sessions_root(&cfg), Some(PathBuf::from(want)));
+        }
+    }
+
+    #[test]
+    fn repoints_a_stale_link() {
+        let paths = temp_paths("relink");
+        let a = create_account(&paths, "work", None, "t".into()).unwrap();
+        let (old, new) = (paths.home.join("old"), paths.home.join("new"));
+        link_code_sessions(&a, &old).unwrap();
+        link_code_sessions(&a, &new).unwrap();
+        assert!(is_code_sessions_linked(&a, &new));
+        assert!(!is_code_sessions_linked(&a, &old));
+        assert!(old.is_dir(), "the old target is left alone");
     }
 
     #[test]

@@ -27,21 +27,28 @@ to one profile and drops it the moment you sign out). Instead, each account live
 in its **own permanent Claude profile folder**, launched independently. Logging
 into one account never touches another, so nothing ever gets logged out.
 
-- **Everything stays on your Mac.** guise never reads, copies, or decrypts your
-  login — Claude owns each folder; guise only decides which one to open.
+- **Everything stays on your computer.** guise never reads, copies, or decrypts
+  your login — Claude owns each folder; guise only decides which one to open.
 - **Accounts stay live together.** Open two (or more) Claude windows at once and
   click between them.
 - **Set up once.** Log into each account a single time; it stays logged in.
 
 ## Install
 
-**Quick install**
+**Quick install — macOS:**
 
 ```console
 curl -fsSL https://raw.githubusercontent.com/siddhjagani/guise/main/install.sh | bash
 ```
 
-**Homebrew:**
+**Quick install — Windows** (PowerShell; installs to
+`%LOCALAPPDATA%\guise\bin` and adds it to your `PATH`):
+
+```powershell
+irm https://raw.githubusercontent.com/siddhjagani/guise/main/install.ps1 | iex
+```
+
+**Homebrew (macOS):**
 
 ```console
 brew install siddhjagani/tap/guise
@@ -58,7 +65,8 @@ cd guise && ./install.sh
 Windows:
 ```powershell
 git clone https://github.com/siddhjagani/guise
-cd guise && ./install.ps1
+cd guise
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 macOS (Apple Silicon + Intel) and Windows. Run `guise doctor` any time to check
@@ -145,6 +153,10 @@ guise can't give each window a custom title. To move between open accounts:
 - Each window's title reflects its own account's workspace/chat, so they're not
   identical on screen.
 
+On Windows, every account's window groups under the one Claude taskbar button —
+hover it to pick a window, or use **Alt-Tab**. `guise <name>` also brings that
+account's window to the front.
+
 ## Is everything okay?
 
 ```console
@@ -162,11 +174,15 @@ guise checkup
   overall: healthy ✓
 ```
 
+On Windows the first check reads `✓ Claude Desktop  C:\Users\you\AppData\Local\Microsoft\WindowsApps\claude-desktop.exe`
+(or `...\AnthropicClaude\claude.exe` for the older .exe install).
+
 ## Where guise keeps its files
 
-Each account is a folder under `~/.config/guise/accounts/` — its own complete Claude
-profile. Delete `~/.config/guise` and guise forgets every account (each one's login
-just goes away with its folder; nothing else on your Mac is touched).
+Each account is a folder under `~/.config/guise/accounts/` (on Windows,
+`%USERPROFILE%\.config\guise\accounts\`) — its own complete Claude profile. Delete
+`~/.config/guise` and guise forgets every account (each one's login just goes away
+with its folder; nothing else on your computer is touched).
 
 > **Upgrading?** If you have an existing `~/.guise` directory, guise automatically
 > migrates it to `~/.config/guise` on first run and leaves a compatibility symlink
@@ -179,6 +195,16 @@ guise config                              # show settings
 guise config set app-path /path/Claude.app  # if Claude.app isn't in /Applications
 ```
 
+On Windows guise finds Claude by itself: the `claude-desktop.exe` app alias of
+the standard install, or `%LOCALAPPDATA%\AnthropicClaude\claude.exe` for the
+older .exe install. If you turned the alias off (Settings → Apps → Advanced app
+settings → App execution aliases), turn it back on, or point guise at Claude's
+executable:
+
+```powershell
+guise config set app-path "C:\path\to\Claude.exe"
+```
+
 Add `--json` to `guise ls` or `guise doctor` for scriptable output.
 
 ## Good to know
@@ -187,6 +213,18 @@ Add `--json` to `guise ls` or `guise doctor` for scriptable output.
   machine and aren't meant to be copied elsewhere.
 - Running two Claude windows uses roughly twice the memory of one — expected,
   since they're two real app instances.
+- **Windows — sign in with email:** in the window `guise add` opens, choose
+  **Continue with email** and type the verification code into that window.
+  Google, Apple and SSO sign-in return through a `claude://` link that Windows
+  always hands to your normal Claude profile, so they can't finish in a guise
+  window (or sign your normal profile in instead).
+- **Windows — updates:** when Claude updates itself it closes every Claude
+  window and reopens only your normal profile; run `guise all` to bring the
+  others back.
+- **Windows:** sharing Claude Code chats for meld is off by default (the linked
+  chats folder it needs hasn't been proven with Claude on Windows yet). To try it: `guise config set share-code-sessions on`,
+  then set meld's `sessions_root` to the `code-sessions-root` that `guise config`
+  shows, and keep `meld watch` running.
 
 ## Uninstall
 
@@ -197,11 +235,14 @@ rm -rf ~/.config/guise   # remove your saved accounts (optional)
 rm -f ~/.guise           # remove the compatibility symlink, if present
 ```
 
-Windows:
+Windows (close the accounts' Claude windows first — Windows can't delete a
+profile that's still open):
 ```powershell
-Remove-Item $env:LOCALAPPDATA\guise\bin\guise.exe
-Remove-Item -Recurse -Force $env:USERPROFILE\.config\guise  # remove saved accounts (optional)
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\guise"          # remove the program
+Remove-Item -Recurse -Force "$env:USERPROFILE\.config\guise"   # remove your saved accounts (optional)
 ```
+Then take `%LOCALAPPDATA%\guise\bin` off your user `PATH` (Start → "Edit
+environment variables for your account" → Path).
 
 ## License
 
